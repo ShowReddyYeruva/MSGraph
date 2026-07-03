@@ -8,59 +8,44 @@
 .NOTES
     Requirements:
     - PowerShell 5.1 or later
-    - $AppId : App registration client ID
-    - $TenantId : Azure AD tenant ID
-    - $client_secret : App registration client secret
+    - $Tenant : Azure AD tenant name
     - $Groups : Entra ID groups for which assignments need to be deleted
     - Graph API permissions (Delegated):
         ·      DeviceManagementApps.ReadWrite.All
         ·      Group.Read.All
+    - Modules installed in the Automation Account:
+        • Microsoft.Graph.Authentication
 
 #>
-###############################################
-$AppId = #<Azure SPN Id>#
-$TenantId = #<Azure tenant Id>#
-$client_secret = #<Application secret>#
-$Groups = @("INTU-Windows10", "INTU-Windows11") #Entra ID groups for which assignments need to be deleted
-###############################################
 
 
-function Get-AppAuthToken {
+#Tenant Name
+$Tenant = "MyTenant.onmicrosoft.com"
+$Groups = @("INTUNE-MyWindows10", "INTUNE-MyWindows11") #Entra ID groups for which assignments need to be deleted
+
+Write-Host ("Checking for Microsoft.Graph.Authentication module...")
+
+#Get Installed AzureAD Module
+$MgGraphRequestModule = Get-Module -Name "Microsoft.Graph.Authentication" -ListAvailable
   
-    $body = @{
-        client_id     = $AppId
-        scope         = "https://graph.microsoft.com/.default"
-        client_secret = $client_secret
-        grant_type    = "client_credentials"
-    }
-  
-    try { 
-      $tokenRequest = Invoke-WebRequest -Method Post -Uri "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" -ContentType "application/x-www-form-urlencoded" -Body $body -UseBasicParsing -ErrorAction Stop 
-      $token = ($tokenRequest.Content | ConvertFrom-Json).access_token
-  
-      If($token){
-        $authToken = @{
-          'Content-Type'='application\json'
-          'Authorization'="Bearer $token"
-        }
-        
-        return $authToken
-      }
-      else {
-        throw "An error occured getting access token: $($_.Exception.Message)"
-      }
-  
-  
-    }
-  
-    catch { 
-      throw $_.Exception.Message  
-    }
-  
+#Check if it got one for Microsoft.Graph.Authentication module
+if ($MgGraphRequestModule -eq $null)
+{
+    #if not Ask user to install 'Microsoft.Graph.Authentication' module
+    write-host
+    write-host ("Microsoft.Graph.Authentication Powershell module not installed...")
+    write-host ("Install by running 'Install-Module Microsoft.Graph.Authentication from an elevated PowerShell prompt")
+    write-host ("Script can't continue...")
+    write-host
+    exit
+}
+else {
+    write-host ("Microsoft.Graph.Authentication Powershell module installed!!")
 }
 
+Import-Module Microsoft.Graph.Authentication -Force
 
-$AppAuthToken = Get-AppAuthToken
+Connect-MgGraph -TenantId $Tenant -NoWelcome
 
 
 
@@ -81,13 +66,12 @@ do
   
   
   try {
-    $AppBatch = Invoke-RestMethod -Uri $uri -Headers $AppAuthToken -Method Get -UseBasicParsing -ContentType "application/json"
+    Connect-MgGraph -TenantId $Tenant -NoWelcome
+    $AppBatch = Invoke-MgGraphRequest -uri $uri -method GET -ContentType "application/json"
   }
   catch {
     $_.Exception.Message
     $Fail = $_.Exception.Message
-    #$Device.deviceName
-    Start-Sleep -Seconds 20
   }
 
   if ($AppBatch.value)
@@ -117,11 +101,14 @@ foreach($Group in $Groups){
   $graphApiVersion = "beta"
   $Resource = "groups"
   $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)`?`$filter= displayName eq '$Group'"
-  $ADgroups += (Invoke-RestMethod -Uri $uri -Headers $AppAuthToken -Method Get -UseBasicParsing -ContentType "application/json").value
+  Connect-MgGraph -TenantId $Tenant -NoWelcome
+  $ADgroups += (Invoke-MgGraphRequest -uri $uri -method GET -ContentType "application/json").value
 }
 
 
+
 ####################Delete assignments if matches with provided group IDs###############
+
 
 ForEach($WinApp in $WinApps){
   foreach($AppAssignment in $WinApp.assignments){
@@ -131,18 +118,20 @@ ForEach($WinApp in $WinApps){
       $uri = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$($WinApp.id)/assignments/$($AppAssignment.id)"
       
       try {
-        Invoke-RestMethod -Uri $uri -Headers $AppAuthToken -Method DELETE -UseBasicParsing -ContentType "application/json"
+        Connect-MgGraph -TenantId $Tenant -NoWelcome
+        Invoke-MgGraphRequest -uri $uri -method DELETE -ContentType "application/json" 
+        Write-Host "Action: Deleted" -ForegroundColor Green
+        Write-Host ""
       }
       catch {
         $_.Exception.Message
+        Write-Host "Action: ERROR" -ForegroundColor Red
+        Write-Host ""
       }
-      Write-Host "Action: Deleted"
-      Write-Host ""
+      
     }
   }
 }
-
-
 
 
 
